@@ -160,10 +160,17 @@ function ColisCard({
         <div>
           <p className="text-ink font-medium">{colis.produit}</p>
           <p className="text-xs text-ink-soft mt-0.5">
-            Acheté le {formatDate(colis.date_achat)} · Coût de revient : {formatFCFA(cout)}
+            Acheté le {formatDate(colis.date_achat)}
           </p>
           <p className="text-xs text-ink-soft mt-0.5">
             {quantite} unité{quantite > 1 ? 's' : ''} × {formatFCFA(prixUnitaire)} = {formatFCFA(colis.prix_achat)}
+          </p>
+          <p className="text-xs text-ink-soft mt-0.5">
+            Transport : {formatFCFA(colis.transport)}
+            {colis.autres_frais > 0 && <> · Autres frais : {formatFCFA(colis.autres_frais)}</>}
+          </p>
+          <p className="text-xs text-ink mt-0.5 font-medium">
+            Coût total de revient : {formatFCFA(cout)}
           </p>
           {colis.frais_commentaire && (
             <p className="text-xs text-ink-soft mt-0.5">Note : {colis.frais_commentaire}</p>

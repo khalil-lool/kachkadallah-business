@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -12,6 +12,7 @@ import {
   Cell,
 } from 'recharts'
 import { supabase, type Colis, type Depense } from '../lib/supabaseClient'
+import { useAuth } from '../lib/AuthContext'
 import {
   calculerCaisse,
   formatFCFA,
@@ -27,21 +28,27 @@ const EXPENSE = '#9c4a26'
 const RULE = '#d9d3c4'
 
 export default function Dashboard() {
+  const { profile, isOperateur } = useAuth()
   const [colisList, setColisList] = useState<Colis[]>([])
   const [depenses, setDepenses] = useState<Depense[]>([])
+  const [capitalInitial, setCapitalInitial] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [editCapital, setEditCapital] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const [{ data: c }, { data: d }, { data: r }] = await Promise.all([
+      supabase.from('colis').select('*').order('date_achat', { ascending: false }),
+      supabase.from('depenses').select('*').order('date', { ascending: false }),
+      supabase.from('reglages_caisse').select('*').eq('id', true).maybeSingle(),
+    ])
+    setColisList((c as Colis[]) ?? [])
+    setDepenses((d as Depense[]) ?? [])
+    setCapitalInitial(r?.capital_initial ?? 0)
+    setLoading(false)
+  }
 
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      const [{ data: c }, { data: d }] = await Promise.all([
-        supabase.from('colis').select('*').order('date_achat', { ascending: false }),
-        supabase.from('depenses').select('*').order('date', { ascending: false }),
-      ])
-      setColisList((c as Colis[]) ?? [])
-      setDepenses((d as Depense[]) ?? [])
-      setLoading(false)
-    }
     load()
   }, [])
 
@@ -49,8 +56,8 @@ export default function Dashboard() {
     return <p className="text-ink-soft">Chargement…</p>
   }
 
-  const stats = calculerCaisse(colisList, depenses)
-  const evolution = evolutionCaisse(colisList, depenses)
+  const stats = calculerCaisse(colisList, depenses, capitalInitial)
+  const evolution = evolutionCaisse(colisList, depenses, capitalInitial)
   const beneficesColis = beneficeParColisVendu(colisList)
 
   const dernieresOperations = [
@@ -78,7 +85,27 @@ export default function Dashboard() {
       <section className="text-center py-6">
         <p className="text-sm text-ink-soft mb-2">Solde de caisse actuel</p>
         <p className="font-display text-5xl text-ink tabular">{formatFCFA(stats.solde)}</p>
+        {isOperateur && (
+          <button
+            onClick={() => setEditCapital(true)}
+            className="mt-3 text-xs text-ink-soft border border-rule rounded-sm px-3 py-1.5 hover:bg-paper-raised hover:text-ink"
+          >
+            Modifier le capital de départ
+          </button>
+        )}
       </section>
+
+      {editCapital && (
+        <CapitalModal
+          valeurActuelle={capitalInitial}
+          operateurId={profile!.id}
+          onClose={() => setEditCapital(false)}
+          onSaved={() => {
+            setEditCapital(false)
+            load()
+          }}
+        />
+      )}
 
       <section className="grid grid-cols-3 gap-px bg-rule border border-rule rounded-sm overflow-hidden">
         <div className="bg-paper-raised p-4 text-center">
@@ -87,7 +114,7 @@ export default function Dashboard() {
         </div>
         <div className="bg-paper-raised p-4 text-center">
           <p className="text-2xl font-display tabular text-ink">{stats.colisEnCours}</p>
-          <p className="text-xs text-ink-soft mt-1">Colis en cours</p>
+          <p className="text-xs text-ink-soft mt-1">Produits en cours</p>
         </div>
         <div className="bg-paper-raised p-4 text-center">
           <p className="text-2xl font-display tabular text-expense">{formatFCFA(stats.totalDepenses)}</p>
@@ -197,6 +224,89 @@ export default function Dashboard() {
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+function CapitalModal({
+  valeurActuelle,
+  operateurId,
+  onClose,
+  onSaved,
+}: {
+  valeurActuelle: number
+  operateurId: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [valeur, setValeur] = useState(String(valeurActuelle))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError(null)
+    setSaving(true)
+    const { error } = await supabase
+      .from('reglages_caisse')
+      .update({
+        capital_initial: parseFloat(valeur) || 0,
+        updated_by: operateurId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', true)
+    setSaving(false)
+    if (error) {
+      setError('Erreur lors de la modification : ' + error.message)
+      return
+    }
+    onSaved()
+  }
+
+  return (
+    <div className="fixed inset-0 bg-ink/40 flex items-center justify-center px-4 z-10">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-paper-raised border border-rule rounded-sm p-6 w-full max-w-sm space-y-4"
+      >
+        <div>
+          <p className="font-display text-lg text-ink">Capital de départ</p>
+          <p className="text-xs text-ink-soft mt-1">
+            Montant de départ (avant tout achat/vente) à inclure dans le solde de caisse.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm text-ink-soft mb-1.5">Montant</label>
+          <input
+            type="number"
+            step="0.01"
+            autoFocus
+            value={valeur}
+            onChange={(e) => setValeur(e.target.value)}
+            className="w-full px-3 py-2 border border-rule rounded-sm bg-paper tabular focus:outline-none focus:ring-2 focus:ring-gold/40"
+          />
+        </div>
+
+        {error && <p className="text-expense text-sm">{error}</p>}
+
+        <div className="flex gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 py-2.5 border border-rule rounded-sm text-ink hover:bg-paper"
+          >
+            Annuler
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="flex-1 py-2.5 bg-ink text-paper-raised rounded-sm font-medium hover:bg-ink-soft disabled:opacity-60"
+          >
+            {saving ? 'Enregistrement…' : 'Enregistrer'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }

@@ -22,6 +22,7 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-10">
+          <img src="/logo.png" alt="Kachkadallah Business" className="h-16 w-auto mx-auto mb-4" />
           <p className="font-display text-2xl text-ink tracking-tight">Kachkadallah Business</p>
           <p className="text-ink-soft text-sm mt-1">Registre des achats, ventes et caisse</p>
         </div>

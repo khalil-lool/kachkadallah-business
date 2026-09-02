@@ -72,7 +72,7 @@ export default function Layout() {
 
         {!isOperateur && (
           <div className="bg-ink text-paper-raised text-center text-xs py-1.5 px-4">
-            Mode consultation — lecture seule, aucune modification possible
+            La confiance n'exclut pas le contrôle.
           </div>
         )}
 
@@ -113,12 +113,12 @@ function Footer() {
       <div className="border-t border-rule">
         <div className="max-w-4xl mx-auto px-5 py-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between text-xs text-ink-soft">
           <span>© {annee} Kachkadallah Business · Utilisation interne</span>
-          <span>Besoin d’aide ? Contactez l’opérateur de l’application.</span>
+          <span>Ce qui est fait à la lumière du jour ne craint pas d'être vu.</span>
         </div>
       </div>
       <div className="hidden">
         <span>Kachkadallah Business — Registre de caisse</span>
-        <span>Données hébergées et sécurisées via Supabase</span>
+        <span>Ce qui est fait à la lumière du jour ne craint pas d'être vu.</span>
       </div>
     </footer>
   )

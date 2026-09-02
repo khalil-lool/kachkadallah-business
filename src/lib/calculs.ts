@@ -9,7 +9,7 @@ export function beneficeColis(c: Colis) {
   return c.montant_vente - (c.frais_change || 0) - coutTotalColis(c)
 }
 
-export function calculerCaisse(colisList: Colis[], depenses: Depense[]) {
+export function calculerCaisse(colisList: Colis[], depenses: Depense[], capitalInitial = 0) {
   let totalVentes = 0
   let totalAchatsEtFrais = 0
   let totalFraisChange = 0
@@ -29,7 +29,7 @@ export function calculerCaisse(colisList: Colis[], depenses: Depense[]) {
   }
 
   const totalDepenses = depenses.reduce((sum, d) => sum + d.montant, 0)
-  const solde = totalVentes - totalAchatsEtFrais - totalFraisChange - totalDepenses
+  const solde = capitalInitial + totalVentes - totalAchatsEtFrais - totalFraisChange - totalDepenses
 
   return {
     solde,
@@ -42,7 +42,7 @@ export function calculerCaisse(colisList: Colis[], depenses: Depense[]) {
   }
 }
 
-export function evolutionCaisse(colisList: Colis[], depenses: Depense[]) {
+export function evolutionCaisse(colisList: Colis[], depenses: Depense[], capitalInitial = 0) {
   type Mouvement = { date: string; montant: number }
   const mouvements: Mouvement[] = []
 
@@ -59,7 +59,7 @@ export function evolutionCaisse(colisList: Colis[], depenses: Depense[]) {
   mouvements.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
 
   const parJour = new Map<string, number>()
-  let cumul = 0
+  let cumul = capitalInitial
   for (const m of mouvements) {
     cumul += m.montant
     parJour.set(m.date, cumul)

@@ -38,6 +38,13 @@ export type Depense = {
   created_at: string
 }
 
+export type ReglagesCaisse = {
+  id: boolean
+  capital_initial: number
+  updated_by: string | null
+  updated_at: string
+}
+
 export type Profile = {
   id: string
   nom_affiche: string
