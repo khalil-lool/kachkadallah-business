@@ -1,11 +1,22 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { supabase, type Colis } from '../lib/supabaseClient'
+import { supabase, type Colis, type Vente } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
-import { coutTotalColis, beneficeColis, formatFCFA, formatDate } from '../lib/calculs'
+import {
+  coutTotalColis,
+  coutUnitaireColis,
+  quantiteVendue,
+  quantiteRestante,
+  estEntierementVendu,
+  beneficeVente,
+  beneficeCumuleColis,
+  formatFCFA,
+  formatDate,
+} from '../lib/calculs'
 
 export default function ColisPage() {
   const { profile, isOperateur } = useAuth()
   const [colisList, setColisList] = useState<Colis[]>([])
+  const [ventes, setVentes] = useState<Vente[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [venteEnCours, setVenteEnCours] = useState<Colis | null>(null)
@@ -16,8 +27,12 @@ export default function ColisPage() {
 
   async function reload() {
     setLoading(true)
-    const { data } = await supabase.from('colis').select('*').order('date_achat', { ascending: false })
-    setColisList((data as Colis[]) ?? [])
+    const [{ data: c }, { data: v }] = await Promise.all([
+      supabase.from('colis').select('*').order('date_achat', { ascending: false }),
+      supabase.from('ventes').select('*').order('date_vente', { ascending: false }),
+    ])
+    setColisList((c as Colis[]) ?? [])
+    setVentes((v as Vente[]) ?? [])
     setLoading(false)
   }
 
@@ -87,6 +102,7 @@ export default function ColisPage() {
             <ColisCard
               key={c.id}
               colis={c}
+              ventes={ventes.filter((v) => v.colis_id === c.id)}
               isOperateur={isOperateur}
               onVendre={() => setVenteEnCours(c)}
               onModifier={() => setEditEnCours(c)}
@@ -99,13 +115,15 @@ export default function ColisPage() {
       {venteEnCours && (
         <VenteModal
           colis={venteEnCours}
+          quantiteRestanteColis={quantiteRestante(venteEnCours, ventes)}
+          operateurId={profile!.id}
           onClose={() => setVenteEnCours(null)}
-          onSold={(benefice, colisVendu) => {
+          onSold={(benefice, quantite) => {
             setVenteEnCours(null)
             setConfirmation(
-              `Colis « ${colisVendu.produit} » vendu ${formatFCFA(colisVendu.montant_vente ?? 0)}. ` +
-                `Coût de revient : ${formatFCFA(coutTotalColis(colisVendu))}. ` +
-                `Bénéfice de cette vente : ${formatFCFA(benefice)}.`
+              `${quantite} unité${quantite > 1 ? 's' : ''} de « ${venteEnCours.produit} » vendue${
+                quantite > 1 ? 's' : ''
+              }. Bénéfice de cette vente : ${formatFCFA(benefice)}.`
             )
             reload()
           }}
@@ -127,7 +145,7 @@ export default function ColisPage() {
       {supprimerEnCours && (
         <ConfirmModal
           titre={`Supprimer « ${supprimerEnCours.produit} » ?`}
-          description="Cette action est définitive et retirera ce colis (et son éventuel bénéfice) du calcul de la caisse."
+          description="Cette action est définitive et retirera ce colis (et toutes ses ventes) du calcul de la caisse."
           onAnnuler={() => setSupprimerEnCours(null)}
           onConfirmer={() => handleDelete(supprimerEnCours)}
         />
@@ -138,19 +156,24 @@ export default function ColisPage() {
 
 function ColisCard({
   colis,
+  ventes,
   isOperateur,
   onVendre,
   onModifier,
   onSupprimer,
 }: {
   colis: Colis
+  ventes: Vente[]
   isOperateur: boolean
   onVendre: () => void
   onModifier: () => void
   onSupprimer: () => void
 }) {
   const cout = coutTotalColis(colis)
-  const benefice = beneficeColis(colis)
+  const vendu = quantiteVendue(colis.id, ventes)
+  const restant = quantiteRestante(colis, ventes)
+  const totalVendu = estEntierementVendu(colis, ventes)
+  const beneficeTotal = beneficeCumuleColis(colis, ventes)
   const quantite = colis.quantite ?? 1
   const prixUnitaire = colis.prix_unitaire ?? colis.prix_achat
 
@@ -177,46 +200,55 @@ function ColisCard({
           )}
         </div>
         <span
-          className={`text-xs px-2 py-1 rounded-sm shrink-0 ${
-            colis.statut === 'vendu' ? 'bg-profit-soft text-profit' : 'bg-expense-soft text-expense'
+          className={`text-xs px-2 py-1 rounded-sm shrink-0 text-center ${
+            totalVendu
+              ? 'bg-profit-soft text-profit'
+              : vendu > 0
+                ? 'bg-gold/20 text-ink'
+                : 'bg-expense-soft text-expense'
           }`}
         >
-          {colis.statut === 'vendu' ? 'Vendu' : 'En cours'}
+          {totalVendu ? 'Vendu' : vendu > 0 ? `${vendu}/${quantite} vendus` : 'En cours'}
         </span>
       </div>
 
-      {colis.statut === 'vendu' && benefice != null ? (
-        <div className="mt-3 pt-3 ledger-rule text-sm space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-ink-soft">
-              Vendu{colis.date_vente ? ` le ${formatDate(colis.date_vente)}` : ''}
-            </span>
-            <span className="tabular text-ink">{formatFCFA(colis.montant_vente ?? 0)}</span>
-          </div>
-          {colis.frais_change > 0 && (
-            <div className="flex items-center justify-between text-ink-soft">
-              <span>Frais de change</span>
-              <span className="tabular">-{formatFCFA(colis.frais_change)}</span>
+      {ventes.length > 0 && (
+        <div className="mt-3 pt-3 ledger-rule text-sm space-y-2">
+          {ventes.map((v) => {
+            const b = beneficeVente(v, colis)
+            return (
+              <div key={v.id} className="flex items-center justify-between">
+                <span className="text-ink-soft">
+                  {v.quantite_vendue} unité{v.quantite_vendue > 1 ? 's' : ''} vendue{v.quantite_vendue > 1 ? 's' : ''}
+                  {' '}le {formatDate(v.date_vente)}
+                </span>
+                <span className={`tabular ${b >= 0 ? 'text-profit' : 'text-expense'}`}>
+                  {formatFCFA(v.montant)} ({b >= 0 ? '+' : ''}
+                  {formatFCFA(b)})
+                </span>
+              </div>
+            )
+          })}
+          {ventes.length > 1 && beneficeTotal != null && (
+            <div className="flex items-center justify-between font-medium pt-1 ledger-rule">
+              <span className="text-ink-soft">Bénéfice cumulé</span>
+              <span className={`tabular ${beneficeTotal >= 0 ? 'text-profit' : 'text-expense'}`}>
+                {beneficeTotal >= 0 ? '+' : ''}
+                {formatFCFA(beneficeTotal)}
+              </span>
             </div>
           )}
-          <div className="flex items-center justify-between font-medium">
-            <span className="text-ink-soft">Bénéfice</span>
-            <span className={`tabular ${benefice >= 0 ? 'text-profit' : 'text-expense'}`}>
-              {benefice >= 0 ? '+' : ''}
-              {formatFCFA(benefice)}
-            </span>
-          </div>
         </div>
-      ) : null}
+      )}
 
       {isOperateur && (
         <div className="mt-3 pt-3 ledger-rule flex flex-wrap gap-2">
-          {colis.statut === 'en_cours' && (
+          {restant > 0 && (
             <button
               onClick={onVendre}
               className="text-sm text-ink border border-rule rounded-sm px-3 py-1.5 hover:bg-paper"
             >
-              Marquer comme vendu
+              Vendre ({restant} restant{restant > 1 ? 's' : ''})
             </button>
           )}
           <button
@@ -375,21 +407,28 @@ function ColisForm({ operateurId, onDone }: { operateurId: string; onDone: () =>
 
 function VenteModal({
   colis,
+  quantiteRestanteColis,
+  operateurId,
   onClose,
   onSold,
 }: {
   colis: Colis
+  quantiteRestanteColis: number
+  operateurId: string
   onClose: () => void
-  onSold: (benefice: number, colisVendu: Colis) => void
+  onSold: (benefice: number, quantite: number) => void
 }) {
+  const [quantiteVendueInput, setQuantiteVendueInput] = useState(String(quantiteRestanteColis))
   const [montant, setMontant] = useState('')
   const [fraisChange, setFraisChange] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const cout = coutTotalColis(colis)
+
+  const coutUnitaire = coutUnitaireColis(colis)
+  const quantiteNum = parseFloat(quantiteVendueInput) || 0
   const montantNum = parseFloat(montant) || 0
   const fc = parseFloat(fraisChange) || 0
-  const beneficePrevu = montantNum - fc - cout
+  const beneficePrevu = montantNum - fc - coutUnitaire * quantiteNum
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -398,25 +437,30 @@ function VenteModal({
       setError('Indique le montant encaissé.')
       return
     }
-    setSaving(true)
-    const today = new Date().toISOString().slice(0, 10)
-    const { data, error } = await supabase
-      .from('colis')
-      .update({
-        statut: 'vendu',
-        montant_vente: montantNum,
-        frais_change: fc,
-        date_vente: today,
-      })
-      .eq('id', colis.id)
-      .select()
-      .single()
-    setSaving(false)
-    if (error || !data) {
-      setError("Erreur lors de l'enregistrement : " + (error?.message ?? ''))
+    if (quantiteNum <= 0) {
+      setError('Indique une quantité supérieure à zéro.')
       return
     }
-    onSold(beneficePrevu, data as Colis)
+    if (quantiteNum > quantiteRestanteColis) {
+      setError(`Tu ne peux pas vendre plus que le restant (${quantiteRestanteColis}).`)
+      return
+    }
+    setSaving(true)
+    const today = new Date().toISOString().slice(0, 10)
+    const { error } = await supabase.from('ventes').insert({
+      colis_id: colis.id,
+      quantite_vendue: quantiteNum,
+      montant: montantNum,
+      frais_change: fc,
+      date_vente: today,
+      created_by: operateurId,
+    })
+    setSaving(false)
+    if (error) {
+      setError("Erreur lors de l'enregistrement : " + error.message)
+      return
+    }
+    onSold(beneficePrevu, quantiteNum)
   }
 
   return (
@@ -427,16 +471,32 @@ function VenteModal({
       >
         <div>
           <p className="font-display text-lg text-ink">Vendre « {colis.produit} »</p>
-          <p className="text-xs text-ink-soft mt-1">Coût de revient : {formatFCFA(cout)}</p>
+          <p className="text-xs text-ink-soft mt-1">
+            Restant à vendre : {quantiteRestanteColis} unité{quantiteRestanteColis > 1 ? 's' : ''} · Coût unitaire :{' '}
+            {formatFCFA(coutUnitaire)}
+          </p>
         </div>
 
         <div>
-          <label className="block text-sm text-ink-soft mb-1.5">Montant total encaissé</label>
+          <label className="block text-sm text-ink-soft mb-1.5">Quantité vendue</label>
+          <input
+            type="number"
+            min="0.01"
+            max={quantiteRestanteColis}
+            step="0.01"
+            autoFocus
+            value={quantiteVendueInput}
+            onChange={(e) => setQuantiteVendueInput(e.target.value)}
+            className="w-full px-3 py-2 border border-rule rounded-sm bg-paper tabular focus:outline-none focus:ring-2 focus:ring-gold/40"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm text-ink-soft mb-1.5">Montant encaissé pour cette quantité</label>
           <input
             type="number"
             min="0"
             step="0.01"
-            autoFocus
             value={montant}
             onChange={(e) => setMontant(e.target.value)}
             className="w-full px-3 py-2 border border-rule rounded-sm bg-paper tabular focus:outline-none focus:ring-2 focus:ring-gold/40"
@@ -506,10 +566,6 @@ function EditModal({
   const [transport, setTransport] = useState(String(colis.transport))
   const [autresFrais, setAutresFrais] = useState(String(colis.autres_frais))
   const [commentaire, setCommentaire] = useState(colis.frais_commentaire ?? '')
-  const [montantVente, setMontantVente] = useState(
-    colis.montant_vente != null ? String(colis.montant_vente) : ''
-  )
-  const [fraisChange, setFraisChange] = useState(String(colis.frais_change || 0))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -529,11 +585,6 @@ function EditModal({
       transport: parseFloat(transport) || 0,
       autres_frais: parseFloat(autresFrais) || 0,
       frais_commentaire: commentaire.trim() || null,
-    }
-
-    if (colis.statut === 'vendu') {
-      payload.montant_vente = parseFloat(montantVente) || 0
-      payload.frais_change = parseFloat(fraisChange) || 0
     }
 
     const { error } = await supabase.from('colis').update(payload).eq('id', colis.id)
@@ -620,33 +671,6 @@ function EditModal({
             className="w-full px-3 py-2 border border-rule rounded-sm bg-paper focus:outline-none focus:ring-2 focus:ring-gold/40"
           />
         </div>
-
-        {colis.statut === 'vendu' && (
-          <div className="grid grid-cols-2 gap-3 pt-2 ledger-rule">
-            <div>
-              <label className="block text-sm text-ink-soft mb-1.5">Montant vente</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={montantVente}
-                onChange={(e) => setMontantVente(e.target.value)}
-                className="w-full px-3 py-2 border border-rule rounded-sm bg-paper tabular focus:outline-none focus:ring-2 focus:ring-gold/40"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-ink-soft mb-1.5">Frais de change</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={fraisChange}
-                onChange={(e) => setFraisChange(e.target.value)}
-                className="w-full px-3 py-2 border border-rule rounded-sm bg-paper tabular focus:outline-none focus:ring-2 focus:ring-gold/40"
-              />
-            </div>
-          </div>
-        )}
 
         {error && <p className="text-expense text-sm">{error}</p>}
 

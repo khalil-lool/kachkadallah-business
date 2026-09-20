@@ -1,31 +1,65 @@
-import type { Colis, Depense } from './supabaseClient'
+import type { Colis, Depense, Vente } from './supabaseClient'
 
 export function coutTotalColis(c: Pick<Colis, 'prix_achat' | 'transport' | 'autres_frais'>) {
   return c.prix_achat + c.transport + c.autres_frais
 }
 
-export function beneficeColis(c: Colis) {
-  if (c.statut !== 'vendu' || c.montant_vente == null) return null
-  return c.montant_vente - (c.frais_change || 0) - coutTotalColis(c)
+export function coutUnitaireColis(c: Colis) {
+  return c.quantite > 0 ? coutTotalColis(c) / c.quantite : 0
 }
 
-export function calculerCaisse(colisList: Colis[], depenses: Depense[], capitalInitial = 0) {
-  let totalVentes = 0
+export function quantiteVendue(colisId: string, ventes: Vente[]) {
+  return ventes
+    .filter((v) => v.colis_id === colisId)
+    .reduce((sum, v) => sum + v.quantite_vendue, 0)
+}
+
+export function quantiteRestante(c: Colis, ventes: Vente[]) {
+  return c.quantite - quantiteVendue(c.id, ventes)
+}
+
+export function estEntierementVendu(c: Colis, ventes: Vente[]) {
+  return quantiteRestante(c, ventes) <= 0
+}
+
+export function beneficeVente(v: Vente, colis: Colis) {
+  const coutUnitaire = coutUnitaireColis(colis)
+  return v.montant - (v.frais_change || 0) - coutUnitaire * v.quantite_vendue
+}
+
+export function beneficeCumuleColis(c: Colis, ventes: Vente[]) {
+  const ventesDuColis = ventes.filter((v) => v.colis_id === c.id)
+  if (ventesDuColis.length === 0) return null
+  return ventesDuColis.reduce((sum, v) => sum + beneficeVente(v, c), 0)
+}
+
+export function calculerCaisse(
+  colisList: Colis[],
+  ventes: Vente[],
+  depenses: Depense[],
+  capitalInitial = 0
+) {
   let totalAchatsEtFrais = 0
-  let totalFraisChange = 0
-  let beneficeCumule = 0
   let colisEnCours = 0
 
   for (const c of colisList) {
-    const cout = coutTotalColis(c)
-    totalAchatsEtFrais += cout
-    if (c.statut === 'vendu' && c.montant_vente != null) {
-      totalVentes += c.montant_vente
-      totalFraisChange += c.frais_change || 0
-      beneficeCumule += c.montant_vente - (c.frais_change || 0) - cout
-    } else {
+    totalAchatsEtFrais += coutTotalColis(c)
+    if (!estEntierementVendu(c, ventes)) {
       colisEnCours += 1
     }
+  }
+
+  let totalVentes = 0
+  let totalFraisChange = 0
+  let beneficeCumule = 0
+
+  const colisParId = new Map(colisList.map((c) => [c.id, c]))
+  for (const v of ventes) {
+    const c = colisParId.get(v.colis_id)
+    if (!c) continue
+    totalVentes += v.montant
+    totalFraisChange += v.frais_change || 0
+    beneficeCumule += beneficeVente(v, c)
   }
 
   const totalDepenses = depenses.reduce((sum, d) => sum + d.montant, 0)
@@ -42,15 +76,20 @@ export function calculerCaisse(colisList: Colis[], depenses: Depense[], capitalI
   }
 }
 
-export function evolutionCaisse(colisList: Colis[], depenses: Depense[], capitalInitial = 0) {
+export function evolutionCaisse(
+  colisList: Colis[],
+  ventes: Vente[],
+  depenses: Depense[],
+  capitalInitial = 0
+) {
   type Mouvement = { date: string; montant: number }
   const mouvements: Mouvement[] = []
 
   for (const c of colisList) {
     mouvements.push({ date: c.date_achat, montant: -coutTotalColis(c) })
-    if (c.statut === 'vendu' && c.montant_vente != null && c.date_vente) {
-      mouvements.push({ date: c.date_vente, montant: c.montant_vente - (c.frais_change || 0) })
-    }
+  }
+  for (const v of ventes) {
+    mouvements.push({ date: v.date_vente, montant: v.montant - (v.frais_change || 0) })
   }
   for (const d of depenses) {
     mouvements.push({ date: d.date, montant: -d.montant })
@@ -68,14 +107,21 @@ export function evolutionCaisse(colisList: Colis[], depenses: Depense[], capital
   return Array.from(parJour.entries()).map(([date, solde]) => ({ date, solde }))
 }
 
-export function beneficeParColisVendu(colisList: Colis[]) {
+export function beneficeParColisVendu(colisList: Colis[], ventes: Vente[]) {
   return colisList
-    .filter((c) => c.statut === 'vendu' && c.montant_vente != null)
-    .sort((a, b) => ((a.date_vente ?? '') < (b.date_vente ?? '') ? -1 : 1))
-    .map((c) => ({
-      produit: c.produit,
-      benefice: (c.montant_vente as number) - (c.frais_change || 0) - coutTotalColis(c),
-    }))
+    .filter((c) => estEntierementVendu(c, ventes) && quantiteVendue(c.id, ventes) > 0)
+    .map((c) => {
+      const ventesDuColis = ventes.filter((v) => v.colis_id === c.id)
+      const derniereVente = ventesDuColis.reduce((latest, v) =>
+        v.date_vente > latest.date_vente ? v : latest
+      )
+      return {
+        produit: c.produit,
+        benefice: beneficeCumuleColis(c, ventes) ?? 0,
+        dateVente: derniereVente.date_vente,
+      }
+    })
+    .sort((a, b) => (a.dateVente < b.dateVente ? -1 : 1))
 }
 
 export function formatFCFA(montant: number) {

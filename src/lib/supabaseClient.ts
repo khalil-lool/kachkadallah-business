@@ -29,6 +29,17 @@ export type Colis = {
   created_at: string
 }
 
+export type Vente = {
+  id: string
+  colis_id: string
+  quantite_vendue: number
+  montant: number
+  frais_change: number
+  date_vente: string
+  created_by: string
+  created_at: string
+}
+
 export type Depense = {
   id: string
   montant: number

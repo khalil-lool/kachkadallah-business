@@ -11,13 +11,12 @@ import {
   Tooltip,
   Cell,
 } from 'recharts'
-import { supabase, type Colis, type Depense } from '../lib/supabaseClient'
+import { supabase, type Colis, type Vente, type Depense } from '../lib/supabaseClient'
 import { useAuth } from '../lib/AuthContext'
 import {
   calculerCaisse,
   formatFCFA,
   formatDate,
-  coutTotalColis,
   evolutionCaisse,
   beneficeParColisVendu,
 } from '../lib/calculs'
@@ -30,6 +29,7 @@ const RULE = '#d9d3c4'
 export default function Dashboard() {
   const { profile, isOperateur } = useAuth()
   const [colisList, setColisList] = useState<Colis[]>([])
+  const [ventes, setVentes] = useState<Vente[]>([])
   const [depenses, setDepenses] = useState<Depense[]>([])
   const [capitalInitial, setCapitalInitial] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -37,12 +37,14 @@ export default function Dashboard() {
 
   async function load() {
     setLoading(true)
-    const [{ data: c }, { data: d }, { data: r }] = await Promise.all([
+    const [{ data: c }, { data: v }, { data: d }, { data: r }] = await Promise.all([
       supabase.from('colis').select('*').order('date_achat', { ascending: false }),
+      supabase.from('ventes').select('*').order('date_vente', { ascending: false }),
       supabase.from('depenses').select('*').order('date', { ascending: false }),
       supabase.from('reglages_caisse').select('*').eq('id', true).maybeSingle(),
     ])
     setColisList((c as Colis[]) ?? [])
+    setVentes((v as Vente[]) ?? [])
     setDepenses((d as Depense[]) ?? [])
     setCapitalInitial(r?.capital_initial ?? 0)
     setLoading(false)
@@ -56,20 +58,26 @@ export default function Dashboard() {
     return <p className="text-ink-soft">Chargement…</p>
   }
 
-  const stats = calculerCaisse(colisList, depenses, capitalInitial)
-  const evolution = evolutionCaisse(colisList, depenses, capitalInitial)
-  const beneficesColis = beneficeParColisVendu(colisList)
+  const stats = calculerCaisse(colisList, ventes, depenses, capitalInitial)
+  const evolution = evolutionCaisse(colisList, ventes, depenses, capitalInitial)
+  const beneficesColis = beneficeParColisVendu(colisList, ventes)
 
   const dernieresOperations = [
     ...colisList.map((c) => ({
-      type: c.statut === 'vendu' ? ('vente' as const) : ('achat' as const),
-      date: c.statut === 'vendu' && c.date_vente ? c.date_vente : c.date_achat,
+      type: 'achat' as const,
+      date: c.date_achat,
       label: c.produit,
-      montant:
-        c.statut === 'vendu' && c.montant_vente != null
-          ? c.montant_vente - coutTotalColis(c)
-          : -coutTotalColis(c),
+      montant: -(c.prix_achat + c.transport + c.autres_frais),
     })),
+    ...ventes.map((v) => {
+      const c = colisList.find((col) => col.id === v.colis_id)
+      return {
+        type: 'vente' as const,
+        date: v.date_vente,
+        label: c ? c.produit : 'Colis supprimé',
+        montant: v.montant - (v.frais_change || 0),
+      }
+    }),
     ...depenses.map((d) => ({
       type: 'depense' as const,
       date: d.date,
